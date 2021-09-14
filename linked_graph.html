@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Linked Graph</title>
+    <script src="https://d3js.org/d3.v5.js"></script>
+    <style>
+
+        body {
+            background-color: ivory;
+        }
+
+        h1 {
+            text-align: center;
+        }
+        h2 {
+            text-align: center;
+        }
+
+        h3 {
+            text-align: center;
+        }
+
+        #dropdown_container{
+            position : absolute;
+            left: 800px;
+            top: 120px;
+            width: 50%;
+        }
+
+        #blank_space{
+            height:20px;
+        }
+
+        .selection1 {
+            width: 50%;
+        }
+
+        .border {
+            fill: none;
+        }
+
+        .regular{
+            fill: #add8e6;
+        }
+
+        .brush rect.selection{
+            fill: red;
+            fill-opacity: 0.1;
+        }
+
+        div.tooltip {
+            position: absolute;
+            text-align: left;
+            width: 110px;
+            height: 60px;
+            padding: 5px;
+            font: 12px sans-serif;
+            background: lightsteelblue;
+            border: 0px;
+            border-radius: 8px;
+        }
+
+        div.tooltip1 {
+            position: absolute;
+            text-align: left;
+            top:220px;
+            left:80px;
+            width: 150px;
+            height: 110px;
+            padding: 5px;
+            font: 12px sans-serif;
+            border: 0px;
+            border-radius: 8px;
+        }
+
+        div.tooltip2 {
+            position: absolute;
+            text-align: left;
+            left:70px;
+            top:600px;
+            width: 110px;
+            height: 110px;
+            padding: 5px;
+            font: 10px sans-serif;
+            border: 1px;
+        }
+    </style>
+</head>
+<body>
+<h1> Spread of COVID-19 in countries throughout the world</h1>
+<h2> and the measures taken to control the spread</h2>
+<script src ="assets/js/bar_line_scatter_plot.js"></script>
+<script src ="assets/js/stacked_area_chart.js"></script>
+<div id = "dropdown_container"></div>
+<div id = "blank_space"></div>
+<div id = "bls_container"></div>
+<div id = "source_bls", style= "position: absolute;left:80px;font-size: 10px">
+    *Source: ECDC,
+    <a href="https://www.ecdc.europa.eu/en/publications-data/download-todays-data-geographic-distribution-covid-19-cases-worldwide">https://www.ecdc.europa.eu/en/publications-data/download-todays-data-geographic-distribution-covid-19-cases-worldwide
+    </a></div>
+<div id = "sac_container"></div>
+<div id = "source_sac", style= "position: absolute;left:80px;font-size: 10px">
+    *Source: PHSM,
+    <a href="https://www.who.int/emergencies/diseases/novel-coronavirus-2019/phsm">https://www.who.int/emergencies/diseases/novel-coronavirus-2019/phsm
+    </a></div>
+
+<script>
+
+    // Data processing and transformation
+    //
+    // ECDC: original attributes: dateRep, country_name, country_code, cases(daily increase)
+    //       transformed attributes: 7-day moving average of daily increased, pre-calculated in python
+    //
+    //       data processing:
+    //       a) for some countries, the start day of record is 2019-12-31, while other countries
+    //       have different start date. I have fixed the time axis to be from 2019-12-31 to 2020-12-14 for all countries
+    //       the missing values are filled with 0 as the reason for some countries to have later start date was because
+    //       previously no cases has been reported in that country.
+    //       b) I have also selected records of countries that only appears in both dataset (ECDC and PHSM)
+    //       that is to say, if one country only appears in one of the dataset, the records of that country
+    //       will not be taken into consideration.
+    //       c) The final dataset was transferred into a .json file.
+    //
+    // PHSM: https://www.who.int/emergencies/diseases/novel-coronavirus-2019/phsm
+    //       original attiribute: country_name, country_code, who_code(only the first level of category),
+    //                            who_category, date_start, date_end, measure_stage
+    //       * records without date_start are removed from the whole dataset
+
+    //       transformed attributes: number of different who measures being implemented on each date
+    //        By saying ‘being implemented’, I actually mean that the measure in action.
+    //        For example, if a Social and physical distancing measure was introduced on 2020-04-01 and
+    //        ended on 2020-09-30, it will be counted for ‘being implemented’ on each date during
+    //        that period.
+    //        Here, I also assume that records without an end date will be treated as on-going measures till 2020-12-14.
+    //        This new attribute required all the original attribute to calculate.
+    //
+    //        Further data processing:
+    //        a) same as above, the time line is set to be from 2019-12-13 to 2020-12-14 for all countries
+    //        b) countries are chosen in the same manner as described above
+    //        c) this dataset is also transferred into a .json file.
+
+    // general description of the additional details of the design:
+    // the layout contains two plots - a bar/line/scatter plot and a stacked area plot
+    // the basic design of the layouts is described in the report
+    // Additionally, the bar/line/scatter plot has a xbrush effect:
+    //      By selecting a brushing area, the area will be highlighted with a light red background,
+    //      the tooltip on the top-left corner of the plot will show the start and end date being selected
+    //      as well as the total number of cases increased during that period of time.
+    //      A corresponding red rectangle will show up in the second plot with the selected time period.
+    //      This will allow viewers to check the number of PHSM measures implemented within the time period
+    //      that they want to see.
+
+
+
+    let target_ct = 'GBR';
+
+    // set the dropdown list
+    d3.json('assets/data/name_ct.json').then(data =>{
+
+
+        let dropDown = d3.select("#dropdown_container")
+                        .append("select")
+                        .attr("class","selection1")
+                        .attr("name","country-list");
+
+        let options = dropDown.selectAll("option")
+                    .data(data)
+                    .enter()
+                    .append("option")
+                    .text(d => d['ct_name'])
+                    .attr("value", d=> d['ct_code']);
+
+        target_ct = d3.select(".selection1").property("value");
+
+
+    });
+
+
+    // set some initial parameters for two plot
+    let margin = {top: 20, right: 20, bottom: 30, left: 50},
+        width = 1200 - margin.left - margin.right,
+        height = 350 - margin.top - margin.bottom;
+
+    // add title to plot 1
+    d3.select("#bls_container")
+        .append("h3")
+        .attr("class","plot1_title")
+        .attr("left", width/2)
+        .attr("text-anchor","middle")
+        .style("font-size","20px");
+
+    // add svg1 for plot1
+    let svg1 = d3.select("#bls_container").append("svg")
+        .attr("width", width + margin.left + margin.right)
+        .attr("height", height + margin.top + margin.bottom)
+        .style("background-color","ivory");
+
+
+    // tooltip for plot1
+    let div = d3.select("body").append("div")
+        .attr("class","tooltip")
+        .style("opacity",0);
+
+    let div1 = d3.select("body").append("div")
+        .attr("class","tooltip1")
+        .style("opacity",0);
+
+    // tooltip for plot2
+    let div2 = d3.select("body").append("div")
+        .attr("class","tooltip2")
+        .style("opacity",0);
+
+    // create plot1
+    const plot1 = svg1.append("g")
+        .attr("transform",
+            "translate(" + margin.left + "," + margin.top + ")");
+
+
+    // add svg2 for plot2
+    let svg2 = d3.select("#sac_container").append("svg")
+        .attr("width", width + margin.left + margin.right)
+        .attr("height", height + margin.top + margin.bottom)
+        .style("background-color","ivory");
+
+    // create plot2
+    const plot2 = svg2.append("g")
+        .attr("transform",
+            "translate(" + margin.left + "," + margin.top + ")");
+
+
+    // load data to plot both plots
+    Promise.all([
+        d3.json("assets/data/world_cd.json"),
+        d3.json('assets/data/phsm_count_agg.json'),
+        d3.json('assets/data/name_ct.json')
+    ]).then(function(files){
+        let data1 = files[0];
+        let data2 = files[1];
+        let data3 = files[2];
+
+        // set the subsets based on the initially selected country
+        let subset1 = data1[target_ct];
+        let subset2 = data2[target_ct];
+
+        // get the name of the country via the selected country code
+        let ct_name = data3.filter(d => d.ct_code ===target_ct)[0]['ct_name'];
+
+
+        // using the object to create a Bar/Line/Scatter plot on plot1
+        let blsplot1 = new BarLineScatterPlot(
+            height,
+            width,
+            plot1,
+            subset1);
+
+        // update the title for plot1
+        d3.select(".plot1_title")
+            .text('Daily Increased Cases in '+ct_name);
+
+        // using the object to create a Stacked Area plot on plot2
+        let sachart1 = new StackedAreaChart(
+            height,
+            width,
+            plot2,
+            subset2);
+
+        // update the title for plot2
+        plot2.append('text')
+            .attr("class","plot2_title")
+            .attr("x", 15)
+            .attr("y", 20)
+            .attr("text-anchor","left")
+            .style("font-size","16px")
+            .text('PHSM implementation of '+ct_name);
+
+        // set the update function of the dropdown list
+        d3.select(".selection1").on("change", function(d){
+
+            // hide two tooltip after the transfer
+            div1.style("opacity",0);
+            div2.style("opacity",0);
+
+            // select the new value of the droplist
+            let new_target_ct = d3.select(this).property("value");
+            let newct_name = data3.filter(d => d.ct_code ===new_target_ct)[0]['ct_name'];
+
+            // get the updated subset
+            let new_subset1 = data1[new_target_ct];
+            let new_subset2 = data2[new_target_ct];
+
+            // update plot1
+            blsplot1.update(new_subset1);
+            d3.select(".plot1_title")
+                .text('Daily Increased Cases in '+newct_name);
+
+            // update plot2
+            sachart1.update(new_subset2);
+            plot2.select(".plot2_title")
+                .text('PHSM implementation of '+newct_name);
+
+        });
+    });
+
+    // create the corresponding red rect on plot 2
+    let select_rect = svg2
+        .append("rect")
+        .attr("x",100+50)
+        .attr("y",0+20)
+        .attr("height",height)
+        .attr("width",0)
+        .style("fill","none")
+        .style("stroke","red");
+
+
+    // add a vertical line that show the position of the mouse for plot 2
+    let vertical2 = d3.select("#sac_container")
+        .append("div")
+        .attr("class", "remove")
+        .style("position", "absolute")
+        .style("z-index", "19")
+        .style("width", "1px")
+        .style("height", "335px")
+        .style("top", "550px")
+        .style("bottom", "30px")
+        .style("left", "0px")
+        .style("background", "#fff");
+
+    svg2.on("mousemove", function(){
+        mousex = d3.mouse(this);
+
+        if (mousex[0]<887 && mousex[0]>51){
+            vertical2.style("left", mousex[0]+7 + "px" );
+        };
+
+    })
+        .on("mouseover", function(){
+            mousex = d3.mouse(this);
+            if (mousex[0]<887 && mousex[0]>51){
+                vertical2.style("left", mousex[0]+7 + "px" );
+            };
+        });
+
+
+
+
+
+
+</script>
+</body>
+</html>
